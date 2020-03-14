@@ -73,16 +73,44 @@ STATIC VOID FdtDeleteNodeList (VOID)
   NodeList = NULL;
 }
 
-STATIC VOID FdtAppendToNodeList (CONST CHAR8 *NodeName,
-                                      UINT32 NameLen,
-                                      UINT32 NodeOffset)
+STATIC UINT32 GetNodeNameLen (CONST CHAR8 *NodeName)
 {
-  FDT_FIRST_LEVEL_NODE *Node;
+  CONST CHAR8 *Ptr = NULL;
+  CONST CHAR8 *End = NodeName + AsciiStrLen (NodeName);
+  UINT32 NameLen = 0;
+
+  if (! *NodeName) {
+    return NameLen;
+  }
+  Ptr = strchr (NodeName, '{');
+  if (! Ptr) {
+    Ptr = End;
+  }
+
+  NameLen = Ptr - NodeName;
+  return NameLen;
+}
+
+STATIC BOOLEAN IsNodeAdded (CONST CHAR8 *NodeName, UINT32 NameLen)
+{
+  FDT_FIRST_LEVEL_NODE *Node = NULL;
 
   for (Node = NodeList; Node; Node = Node->Next) {
     if (!AsciiStrnCmp (Node->NodeName, NodeName, NameLen)) {
-      return;
+      return TRUE;
     }
+  }
+  return FALSE;
+}
+
+STATIC VOID FdtAppendToNodeList (CONST CHAR8 *NodeName, INT32 NodeOffset)
+{
+  FDT_FIRST_LEVEL_NODE *Node;
+  UINT32 NameLen;
+
+  NameLen = GetNodeNameLen (NodeName);
+  if (IsNodeAdded (NodeName, NameLen)) {
+    return;
   }
 
   Node = AllocateZeroPool (sizeof (*Node));
@@ -100,7 +128,7 @@ STATIC VOID FdtAppendToNodeList (CONST CHAR8 *NodeName,
 
 STATIC BOOLEAN FdtFindNodeFromList (CONST CHAR8 *Name,
                                         UINT32 NameLen,
-                                        UINT32 *NodeOffset)
+                                        INT32 *NodeOffset)
 {
   FDT_FIRST_LEVEL_NODE *Node = NULL;
 
@@ -119,7 +147,7 @@ STATIC BOOLEAN FdtFindNodeFromList (CONST CHAR8 *Name,
   return FALSE;
 }
 
-VOID FdtUpdateNodeOffsetInList (UINT32 NodeOffset, INT32 DiffLen)
+VOID FdtUpdateNodeOffsetInList (INT32 NodeOffset, INT32 DiffLen)
 {
   FDT_FIRST_LEVEL_NODE *Node = NULL;
 
@@ -146,7 +174,7 @@ VOID FdtUpdateNodeOffsetInList (UINT32 NodeOffset, INT32 DiffLen)
   @retval TRUE          Match.
   @retval FALSE         Mismatch.
  **/
-STATIC BOOLEAN FdtNodeNameEq (CONST VOID *Fdt, UINT32 Offset,
+STATIC BOOLEAN FdtNodeNameEq (CONST VOID *Fdt, INT32 Offset,
                                    CONST CHAR8 *Source, UINT32 Len)
 {
   CONST CHAR8 *Ptr = fdt_offset_ptr (Fdt, Offset + FDT_TAGSIZE, Len + 1);
@@ -186,7 +214,7 @@ STATIC BOOLEAN FdtNodeNameEq (CONST VOID *Fdt, UINT32 Offset,
   such as a full path.
  **/
 STATIC INT32 FdtSubnodeOffsetNamelen (CONST VOID *Fdt,
-                                     UINT32 Offset,
+                                     INT32 Offset,
                                      CONST CHAR8 *Name,
                                      UINT32 NameLen,
                                      UINT32 Level)
@@ -229,7 +257,7 @@ STATIC INT32 FdtSubnodeOffsetNamelen (CONST VOID *Fdt,
           /* short match: Some error occurs  */
           return 0;
         }
-        FdtAppendToNodeList (Ptr, NameLen, Offset);
+        FdtAppendToNodeList (Ptr, Offset);
       }
       /* Return the offset if find the node */
       if (FdtNodeNameEq (Fdt, Offset, Name, NameLen)) {
@@ -273,48 +301,52 @@ INT32 FdtPathOffset (CONST VOID *Fdt, CONST CHAR8 *Path)
   CONST CHAR8 *End = Path + AsciiStrLen (Path);
   CONST CHAR8 *Ptr = Path;
   CONST CHAR8 *Qtr = NULL;
-  UINT32 Offset = 0;
+  INT32 Offset = 0;
   UINT32 Level = 0;
   INT32 Ret;
 
-  if ((Ret = fdt_check_header (Fdt)) != 0) {
-    return Ret;
-  }
-
-  /* see if we have an alias */
-  if (*Path != '/') {
-    Qtr = strchr (Path, '/');
-    if (!Qtr) {
-      Qtr = End;
+  if (FixedPcdGetBool (EnableNewNodeSearchFuc)) {
+    if ((Ret = fdt_check_header (Fdt)) != 0) {
+      return Ret;
     }
 
-    Ptr = fdt_get_alias_namelen (Fdt, Ptr, Qtr - Ptr);
-    if (!Ptr) {
-      return -FDT_ERR_BADPATH;
+    /* see if we have an alias */
+    if (*Path != '/') {
+      Qtr = strchr (Path, '/');
+      if (!Qtr) {
+        Qtr = End;
+      }
+
+      Ptr = fdt_get_alias_namelen (Fdt, Ptr, Qtr - Ptr);
+      if (!Ptr) {
+        return -FDT_ERR_BADPATH;
+      }
+
+      Offset = FdtPathOffset (Fdt, Ptr);
+      Ptr = Qtr;
     }
 
-    Offset = FdtPathOffset (Fdt, Ptr);
-    Ptr = Qtr;
-  }
+    while (*Ptr) {
+      while (*Ptr == '/') {
+        Ptr++;
+      }
+      if (! *Ptr) {
+        return Offset;
+      }
+      Qtr = strchr (Ptr, '/');
+      if (! Qtr) {
+        Qtr = End;
+      }
 
-  while (*Ptr) {
-    while (*Ptr == '/') {
-      Ptr++;
+      Offset = FdtSubnodeOffsetNamelen (Fdt, Offset, Ptr, Qtr - Ptr, Level);
+      if (Offset < 0) {
+        return Offset;
+      }
+      Ptr = Qtr;
+      Level ++;
     }
-    if (! *Ptr) {
-      return Offset;
-    }
-    Qtr = strchr (Ptr, '/');
-    if (! Qtr) {
-      Qtr = End;
-    }
-
-    Offset = FdtSubnodeOffsetNamelen (Fdt, Offset, Ptr, Qtr - Ptr, Level);
-    if (Offset < 0) {
-      return Offset;
-    }
-    Ptr = Qtr;
-    Level ++;
+  } else {
+    Offset = fdt_path_offset (Fdt, Path);
   }
 
   return Offset;
@@ -367,23 +399,26 @@ INT32 FdtSetProp (VOID *Fdt, INT32 Offset, CONST CHAR8 *Name,
   INT32 OldLen, NewLen;
   INT32 Ret = 0;
 
-  OldLen = FdtGetPropLen (Fdt, Offset, Name);
-  Ret = fdt_setprop (Fdt, Offset, Name, Val, Len);
-  if (Ret == 0) {
-    NewLen = FdtGetPropLen (Fdt, Offset, Name);
+  if (FixedPcdGetBool (EnableNewNodeSearchFuc)) {
+    OldLen = FdtGetPropLen (Fdt, Offset, Name);
+    Ret = fdt_setprop (Fdt, Offset, Name, Val, Len);
+    if (Ret == 0) {
+      NewLen = FdtGetPropLen (Fdt, Offset, Name);
+    } else {
+      return Ret;
+    }
+
+    /* New prop */
+    if (OldLen == 0 &&
+      NewLen) {
+      NewLen = sizeof (struct fdt_property) + FDT_TAGALIGN (NewLen);
+    }
+
+    /* Update the node's offset in the list */
+    FdtUpdateNodeOffsetInList (
+       Offset, FDT_TAGALIGN (NewLen) - FDT_TAGALIGN (OldLen));
   } else {
-    return Ret;
+    Ret = fdt_setprop (Fdt, Offset, Name, Val, Len);
   }
-
-  /* New prop */
-  if (OldLen == 0 &&
-    NewLen) {
-    NewLen = sizeof (struct fdt_property) + FDT_TAGALIGN (NewLen);
-  }
-
-  /* Update the node's offset in the list */
-  FdtUpdateNodeOffsetInList (
-     Offset, FDT_TAGALIGN (NewLen) - FDT_TAGALIGN (OldLen));
-
   return Ret;
 }

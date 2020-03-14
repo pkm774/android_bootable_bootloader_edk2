@@ -895,13 +895,16 @@ BootLinux (BootInfo *Info)
                      (UINTN *)&BootParamlistPtr.ImageSize,
                      ((!Info->MultiSlotBoot ||
                         IsDynamicPartitionSupport ()) &&
-                        Recovery)? "recovery" : "boot");
+                        (Recovery &&
+                        !IsBuildUseRecoveryAsBoot ()))?
+                        "recovery" : "boot");
   if (Status != EFI_SUCCESS ||
       BootParamlistPtr.ImageBuffer == NULL ||
       BootParamlistPtr.ImageSize <= 0) {
     DEBUG ((EFI_D_ERROR, "BootLinux: Get%aImage failed!\n",
             (!Info->MultiSlotBoot &&
-             Recovery)? "Recovery" : "Boot"));
+             (Recovery &&
+             !IsBuildUseRecoveryAsBoot ()))? "Recovery" : "Boot"));
     return EFI_NOT_STARTED;
   }
   /* Find if MDTP is enabled and Active */
@@ -1509,6 +1512,18 @@ BOOLEAN IsDynamicPartitionSupport (VOID)
 }
 #else
 BOOLEAN IsDynamicPartitionSupport (VOID)
+{
+  return FALSE;
+}
+#endif
+
+#if VIRTUAL_AB_OTA
+BOOLEAN IsVirtualAbOtaSupported (VOID)
+{
+  return TRUE;
+}
+#else
+BOOLEAN IsVirtualAbOtaSupported (VOID)
 {
   return FALSE;
 }
